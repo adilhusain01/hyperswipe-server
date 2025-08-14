@@ -2,8 +2,8 @@
 Configuration management for the HyperSwipe Signing Service
 """
 import os
-from typing import List
-from pydantic import field_validator
+from typing import List, Union
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,12 +20,14 @@ class Settings(BaseSettings):
     reload: bool = True
     
     # CORS
-    cors_origins: List[str] = [
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",  # Create React App
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000"
-    ]
+    cors_origins: Union[str, List[str]] = Field(
+        default=[
+            "http://localhost:5173",  # Vite dev server
+            "http://localhost:3000",  # Create React App
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:3000"
+        ]
+    )
     
     # Security
     api_key_header: str = "X-API-Key"
@@ -42,7 +44,7 @@ class Settings(BaseSettings):
     @classmethod
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
-            return [origin.strip() for origin in v.split(',')]
+            return [origin.strip() for origin in v.split(',') if origin.strip()]
         return v
     
     model_config = {
