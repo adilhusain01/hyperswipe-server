@@ -5,7 +5,7 @@ import time
 from typing import Optional, Dict, Any
 from eth_account import Account
 from hyperliquid.utils.signing import sign_l1_action, order_wires_to_order_action, recover_agent_or_user_from_l1_action, order_request_to_order_wire
-from app.models import OrderRequest
+from app.models import OrderRequest, CancelOrderRequest
 import logging
 
 logger = logging.getLogger(__name__)
@@ -200,3 +200,80 @@ class HyperliquidSigner:
         except Exception as e:
             logger.error(f"Signature verification failed: {str(e)}")
             return False
+    
+    def sign_cancel_order(self, cancel_req: CancelOrderRequest) -> Dict[str, Any]:
+        """
+        Sign a cancel order request using the Hyperliquid SDK
+        
+        Args:
+            cancel_req: CancelOrderRequest containing cancel parameters and wallet info
+            
+        Returns:
+            Dict containing success status and either signed request or error message
+        """
+        try:
+            logger.info(f"Starting cancel order signing for {cancel_req.wallet_address}")
+            
+            # Create wallet from private key
+            wallet = Account.from_key(cancel_req.private_key)
+            logger.info(f"Created wallet with address: {wallet.address}")
+            
+            # Validate wallet address matches
+            if wallet.address.lower() != cancel_req.wallet_address.lower():
+                raise ValueError(f"Private key does not match wallet address. Expected: {cancel_req.wallet_address}, Got: {wallet.address}")
+            
+            # Generate nonce (timestamp in milliseconds)
+            nonce = int(time.time() * 1000)
+            
+            # Create cancel action according to Hyperliquid API format
+            cancel_action = {
+                "type": "cancel",
+                "cancels": [
+                    {
+                        "a": cancel_req.asset_index,  # asset index
+                        "o": cancel_req.order_id      # order id
+                    }
+                ]
+            }
+            
+            logger.info(f"Cancel action created: {cancel_action}")
+            
+            # Sign using Hyperliquid SDK
+            logger.info("Signing cancel order with Hyperliquid SDK...")
+            logger.info(f"Signing parameters: wallet={wallet.address}, nonce={nonce}, testnet={self.is_testnet}")
+            
+            signature = sign_l1_action(
+                wallet=wallet,
+                action=cancel_action,
+                active_pool=None,
+                nonce=nonce,
+                expires_after=None,
+                is_mainnet=not self.is_testnet
+            )
+            
+            logger.info(f"Generated cancel signature: {signature}")
+            
+            # Create complete cancel request for Hyperliquid API
+            cancel_request = {
+                "action": cancel_action,
+                "nonce": nonce,
+                "signature": signature
+            }
+            
+            logger.info(f"Complete cancel request for Hyperliquid: {cancel_request}")
+            logger.info("Cancel order signed successfully")
+            
+            return {
+                "success": True,
+                "signature": signature,
+                "order_request": cancel_request,
+                "wallet_address": wallet.address,
+                "nonce": nonce
+            }
+            
+        except Exception as e:
+            logger.error(f"Cancel order signing failed: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }

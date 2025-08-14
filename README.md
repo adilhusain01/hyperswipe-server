@@ -40,11 +40,11 @@ signing-service/
 ### 1. Setup Environment
 
 ```bash
-cd /Users/adilhusain/Documents/HyperSwipe/signing-service
+cd /Users/adilhusain/Documents/HyperSwipe/server
 
 # Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\\Scripts\\activate
+python3 -m venv env
+source env/bin/activate  # On Windows: venv\\Scripts\\activate
 
 # Install dependencies (including websockets for real-time data)
 pip install -r requirements.txt

@@ -55,6 +55,35 @@ class OrderRequest(BaseModel):
         return v
 
 
+class CancelOrderRequest(BaseModel):
+    """Request model for cancel order signing"""
+    
+    # Cancel parameters
+    asset_index: int = Field(..., ge=0, description="Asset index for the perpetual")
+    order_id: int = Field(..., description="Order ID to cancel")
+    
+    # Wallet information
+    wallet_address: str = Field(..., min_length=42, max_length=42, description="Ethereum wallet address")
+    private_key: str = Field(..., min_length=64, max_length=66, description="Private key for signing")
+    
+    @validator('wallet_address')
+    def validate_wallet_address(cls, v):
+        if not v.startswith('0x'):
+            raise ValueError('Wallet address must start with 0x')
+        if len(v) != 42:
+            raise ValueError('Wallet address must be 42 characters long')
+        return v.lower()
+    
+    @validator('private_key')
+    def validate_private_key(cls, v):
+        # Remove 0x prefix if present
+        if v.startswith('0x'):
+            v = v[2:]
+        if len(v) != 64:
+            raise ValueError('Private key must be 64 characters long (32 bytes)')
+        return v
+
+
 class SignatureResponse(BaseModel):
     """Response model for signed transactions"""
     
