@@ -1,0 +1,50 @@
+[Unit]
+Description=HyperSwipe FastAPI Server
+Documentation=https://github.com/your-username/hyperswipe
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=hyperswipe
+Group=hyperswipe
+WorkingDirectory=/opt/hyperswipe
+Environment=PATH=/opt/hyperswipe/venv/bin
+Environment=PYTHONPATH=/opt/hyperswipe
+ExecStart=/opt/hyperswipe/venv/bin/python run.py
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart configuration
+Restart=always
+RestartSec=5
+StartLimitInterval=0
+
+# Output configuration
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hyperswipe-server
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hyperswipe
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete
+
+[Install]
+WantedBy=multi-user.target
