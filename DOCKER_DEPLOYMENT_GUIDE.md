@@ -64,7 +64,9 @@ sudo chmod +x /usr/local/bin/docker-compose
 
 ```bash
 # Create project directory
-mkdir ~/hyperswipe && cd ~/hyperswipe
+sudo mkdir -p /home/ubuntu/projects/hyperswipe-server
+sudo chown ubuntu:ubuntu /home/ubuntu/projects/hyperswipe-server
+cd /home/ubuntu/projects/hyperswipe-server
 
 # Copy your HyperSwipe server files here
 # (Dockerfile, docker-compose.yml, app/, requirements.txt, etc.)

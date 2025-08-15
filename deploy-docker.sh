@@ -15,7 +15,7 @@ NC='\033[0m'
 # Configuration
 DOMAIN="app.hyperswipe.rizzmo.site"
 EMAIL="admin@hyperswipe.rizzmo.site"
-PROJECT_NAME="hyperswipe"
+PROJECT_DIR="/home/ubuntu/projects/hyperswipe-server"
 
 log() {
     echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}"
@@ -67,30 +67,34 @@ else
     log "✅ Docker Compose already installed"
 fi
 
-# Create project directory
+# Create and setup project directory
 log "📁 Setting up project directory..."
-mkdir -p ~/$PROJECT_NAME
-cd ~/$PROJECT_NAME
+sudo mkdir -p $PROJECT_DIR
+sudo chown ubuntu:ubuntu $PROJECT_DIR
+cd $PROJECT_DIR
 
-# Download or copy project files (if not already present)
+# Check if project files exist
 if [ ! -f "docker-compose.yml" ]; then
-    log "📥 Setting up project files..."
-    
-    # Create necessary directories
-    mkdir -p nginx/sites-available nginx/ssl nginx/logs nginx/webroot logs data
-    
-    # You would typically git clone here or copy files
-    # For now, we'll create a minimal structure
-    warn "Please ensure your project files are in the current directory: $(pwd)"
-    warn "Required files: Dockerfile, docker-compose.yml, requirements.txt, app/, etc."
+    error "Project files not found in $PROJECT_DIR"
+    echo "Please ensure the following files are present:"
+    echo "  - Dockerfile"
+    echo "  - docker-compose.yml" 
+    echo "  - requirements.txt"
+    echo "  - app/ directory"
+    echo "  - run.py"
+    exit 1
 fi
+
+# Create necessary directories
+log "📁 Creating required directories..."
+mkdir -p nginx/sites-available nginx/ssl nginx/logs nginx/webroot logs data
 
 # Create environment file if it doesn't exist
 if [ ! -f ".env" ]; then
     log "⚙️ Creating environment configuration..."
     cat > .env << EOF
 # HyperSwipe Docker Environment
-COMPOSE_PROJECT_NAME=$PROJECT_NAME
+COMPOSE_PROJECT_NAME=hyperswipe
 DOMAIN=$DOMAIN
 EMAIL=$EMAIL
 
@@ -183,14 +187,14 @@ fi
 
 # Setup certificate renewal
 log "🔄 Setting up certificate renewal..."
-cat > ~/renew-certs.sh << 'EOF'
+cat > /home/ubuntu/renew-certs.sh << 'EOF'
 #!/bin/bash
-cd ~/hyperswipe
+cd /home/ubuntu/projects/hyperswipe-server
 docker-compose run --rm certbot renew --quiet
 docker-compose exec nginx nginx -s reload
 EOF
 
-chmod +x ~/renew-certs.sh
+chmod +x /home/ubuntu/renew-certs.sh
 
 # Add to crontab
 (crontab -l 2>/dev/null; echo "0 3 * * * /home/ubuntu/renew-certs.sh >> /home/ubuntu/certbot.log 2>&1") | crontab -
@@ -201,25 +205,25 @@ log "✅ Certificate auto-renewal configured"
 log "🛠️ Creating management scripts..."
 
 # Create start script
-cat > ~/start-hyperswipe.sh << 'EOF'
+cat > /home/ubuntu/start-hyperswipe.sh << 'EOF'
 #!/bin/bash
-cd ~/hyperswipe
+cd /home/ubuntu/projects/hyperswipe-server
 docker-compose up -d
 echo "HyperSwipe started. Check status with: docker-compose ps"
 EOF
 
 # Create stop script
-cat > ~/stop-hyperswipe.sh << 'EOF'
+cat > /home/ubuntu/stop-hyperswipe.sh << 'EOF'
 #!/bin/bash
-cd ~/hyperswipe
+cd /home/ubuntu/projects/hyperswipe-server
 docker-compose down
 echo "HyperSwipe stopped."
 EOF
 
 # Create update script
-cat > ~/update-hyperswipe.sh << 'EOF'
+cat > /home/ubuntu/update-hyperswipe.sh << 'EOF'
 #!/bin/bash
-cd ~/hyperswipe
+cd /home/ubuntu/projects/hyperswipe-server
 echo "Pulling latest changes..."
 git pull  # If using git
 echo "Rebuilding containers..."
@@ -231,14 +235,14 @@ echo "Update complete!"
 EOF
 
 # Create logs script
-cat > ~/logs-hyperswipe.sh << 'EOF'
+cat > /home/ubuntu/logs-hyperswipe.sh << 'EOF'
 #!/bin/bash
-cd ~/hyperswipe
+cd /home/ubuntu/projects/hyperswipe-server
 echo "HyperSwipe Logs (Ctrl+C to exit):"
 docker-compose logs -f
 EOF
 
-chmod +x ~/start-hyperswipe.sh ~/stop-hyperswipe.sh ~/update-hyperswipe.sh ~/logs-hyperswipe.sh
+chmod +x /home/ubuntu/start-hyperswipe.sh /home/ubuntu/stop-hyperswipe.sh /home/ubuntu/update-hyperswipe.sh /home/ubuntu/logs-hyperswipe.sh
 
 log "✅ Management scripts created"
 
@@ -256,26 +260,27 @@ echo "   💓 Health: https://$DOMAIN/health"
 echo "   🔌 WebSocket: wss://$DOMAIN/ws"
 echo
 echo "🛠️  MANAGEMENT COMMANDS:"
-echo "   ./start-hyperswipe.sh    - Start all services"
-echo "   ./stop-hyperswipe.sh     - Stop all services"
-echo "   ./update-hyperswipe.sh   - Update and restart"
-echo "   ./logs-hyperswipe.sh     - View logs"
+echo "   ~/start-hyperswipe.sh    - Start all services"
+echo "   ~/stop-hyperswipe.sh     - Stop all services"
+echo "   ~/update-hyperswipe.sh   - Update and restart"
+echo "   ~/logs-hyperswipe.sh     - View logs"
 echo
 echo "🐳 DOCKER COMMANDS:"
-echo "   cd ~/hyperswipe && docker-compose ps              - Show status"
-echo "   cd ~/hyperswipe && docker-compose logs -f         - View logs"
-echo "   cd ~/hyperswipe && docker-compose restart nginx   - Restart nginx"
-echo "   cd ~/hyperswipe && docker-compose down && docker-compose up -d  - Full restart"
+echo "   cd $PROJECT_DIR && docker-compose ps              - Show status"
+echo "   cd $PROJECT_DIR && docker-compose logs -f         - View logs"
+echo "   cd $PROJECT_DIR && docker-compose restart nginx   - Restart nginx"
+echo "   cd $PROJECT_DIR && docker-compose down && docker-compose up -d  - Full restart"
 echo
 echo "📝 CONFIGURATION:"
-echo "   Environment: ~/hyperswipe/.env"
-echo "   Nginx Config: ~/hyperswipe/nginx/sites-available/hyperswipe.conf"
-echo "   Logs: ~/hyperswipe/logs/ and ~/hyperswipe/nginx/logs/"
+echo "   Project Directory: $PROJECT_DIR"
+echo "   Environment: $PROJECT_DIR/.env"
+echo "   Nginx Config: $PROJECT_DIR/nginx/sites-available/hyperswipe.conf"
+echo "   Logs: $PROJECT_DIR/logs/ and $PROJECT_DIR/nginx/logs/"
 echo
 echo "🔧 TROUBLESHOOTING:"
-echo "   1. Check logs: ./logs-hyperswipe.sh"
-echo "   2. Restart services: ./stop-hyperswipe.sh && ./start-hyperswipe.sh"
-echo "   3. Check container status: cd ~/hyperswipe && docker-compose ps"
+echo "   1. Check logs: ~/logs-hyperswipe.sh"
+echo "   2. Restart services: ~/stop-hyperswipe.sh && ~/start-hyperswipe.sh"
+echo "   3. Check container status: cd $PROJECT_DIR && docker-compose ps"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Final instructions
@@ -283,7 +288,7 @@ echo
 info "🚀 Next steps:"
 echo "   1. Update your frontend to use wss://$DOMAIN/ws"
 echo "   2. Test the API at https://$DOMAIN/docs"
-echo "   3. Monitor logs with ./logs-hyperswipe.sh"
+echo "   3. Monitor logs with ~/logs-hyperswipe.sh"
 echo "   4. Set up monitoring and backups as needed"
 
 log "✅ Deployment completed successfully!"
