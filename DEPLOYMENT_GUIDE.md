@@ -90,8 +90,8 @@ sudo chown hyperswipe:hyperswipe /opt/hyperswipe
 
 ```bash
 # Option A: From Git Repository
-sudo -u hyperswipe git clone https://github.com/your-username/hyperswipe.git /tmp/hyperswipe-repo
-sudo -u hyperswipe cp -r /tmp/hyperswipe-repo/hyperswipe-server/* /opt/hyperswipe/
+sudo -u hyperswipe git clone https://github.com/adilhusain01/hyperswipe-server.git /tmp/hyperswipe-server
+sudo -u hyperswipe cp -r /tmp/hyperswipe-server/hyperswipe-server/* /opt/hyperswipe/
 sudo rm -rf /tmp/hyperswipe-repo
 
 # Option B: Upload manually (using scp from local machine)
@@ -135,7 +135,7 @@ PORT=8081
 RELOAD=false
 
 # CORS - Update with your domain
-CORS_ORIGINS=https://your-domain.com,https://www.your-domain.com
+CORS_ORIGINS=https://app.hyperswipe.rizzmo.site,https://www.app.hyperswipe.rizzmo.site
 
 # Security
 RATE_LIMIT_PER_MINUTE=100
@@ -168,7 +168,7 @@ sudo systemctl status hyperswipe-server
 sudo cp /opt/hyperswipe/nginx.conf /etc/nginx/sites-available/hyperswipe-server
 
 # Update domain in nginx config
-sudo sed -i 's/your-domain.com/actual-domain.com/g' /etc/nginx/sites-available/hyperswipe-server
+sudo sed -i 's/app.hyperswipe.rizzmo.site/app.hyperswipe.rizzmo.site/g' /etc/nginx/sites-available/hyperswipe-server
 
 # Enable site
 sudo ln -sf /etc/nginx/sites-available/hyperswipe-server /etc/nginx/sites-enabled/

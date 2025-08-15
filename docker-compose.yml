@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # HyperSwipe FastAPI Server
+  hyperswipe-server:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: hyperswipe-server
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - HOST=0.0.0.0
+      - PORT=8081
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=https://app.hyperswipe.rizzmo.site,https://www.app.hyperswipe.rizzmo.site
+      - HYPERLIQUID_TESTNET=true
+      - HYPERLIQUID_BASE_URL=https://api.hyperliquid-testnet.xyz
+      - RATE_LIMIT_PER_MINUTE=100
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data  # For any persistent data
+    networks:
+      - hyperswipe-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Nginx reverse proxy with SSL
+  nginx:
+    image: nginx:alpine
+    container_name: hyperswipe-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites-available:/etc/nginx/sites-available:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx
+      - certbot-etc:/etc/letsencrypt
+      - certbot-var:/var/lib/letsencrypt
+    networks:
+      - hyperswipe-network
+    depends_on:
+      - hyperswipe-server
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Certbot for SSL certificates
+  certbot:
+    image: certbot/certbot
+    container_name: hyperswipe-certbot
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - certbot-var:/var/lib/letsencrypt
+      - ./nginx/webroot:/var/www/html
+    depends_on:
+      - nginx
+    command: certonly --webroot --webroot-path=/var/www/html --email admin@hyperswipe.rizzmo.site --agree-tos --no-eff-email --staging -d app.hyperswipe.rizzmo.site -d www.app.hyperswipe.rizzmo.site
+
+  # Redis for caching (optional, for future use)
+  redis:
+    image: redis:7-alpine
+    container_name: hyperswipe-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass hyperswipe-redis-password
+    volumes:
+      - redis-data:/data
+    networks:
+      - hyperswipe-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Watchtower for automatic updates (optional)
+  watchtower:
+    image: containrrr/watchtower
+    container_name: hyperswipe-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=3600  # Check every hour
+      - WATCHTOWER_INCLUDE_STOPPED=true
+    command: --interval 3600 hyperswipe-server nginx
+
+volumes:
+  certbot-etc:
+  certbot-var:
+  redis-data:
+
+networks:
+  hyperswipe-network:
+    driver: bridge
