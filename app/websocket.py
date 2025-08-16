@@ -19,7 +19,10 @@ class HyperliquidWebSocketManager:
     def __init__(self):
         self.hyperliquid_ws = None
         self.client_connections: Set[WebSocket] = set()
-        self.subscriptions: Dict[str, list] = {}
+        # Track per-client subscriptions
+        self.client_subscriptions: Dict[WebSocket, Dict[str, any]] = {}
+        # Track which users are subscribed to prevent duplicate Hyperliquid subscriptions
+        self.subscribed_users: Set[str] = set()
         self.is_connected = False
         self.reconnect_task = None
         self.hyperliquid_url = "wss://api.hyperliquid-testnet.xyz/ws"
@@ -96,35 +99,64 @@ class HyperliquidWebSocketManager:
         message_data = data.get("data")
         
         if channel == "allMids":
-            # Broadcast price updates
-            await self.broadcast_to_clients({
+            # Broadcast price updates to all clients (public data)
+            await self.broadcast_to_all_clients({
                 "type": "priceUpdate",
                 "data": message_data
             })
         elif channel == "webData2":
-            # Broadcast user data updates
-            await self.broadcast_to_clients({
-                "type": "userDataUpdate", 
-                "data": message_data
-            })
+            # Send user data only to clients subscribed to this specific user
+            user_address = self.extract_user_from_data(message_data)
+            if user_address:
+                await self.broadcast_to_user_clients(user_address, {
+                    "type": "userDataUpdate", 
+                    "data": message_data
+                })
+            else:
+                logger.warning(f"⚠️ Could not extract user from webData2: {message_data}")
         elif channel == "userEvents":
-            # Broadcast user events
-            await self.broadcast_to_clients({
-                "type": "userEvents",
-                "data": message_data
-            })
+            # Send user events only to clients subscribed to this specific user
+            user_address = self.extract_user_from_data(message_data)
+            if user_address:
+                await self.broadcast_to_user_clients(user_address, {
+                    "type": "userEvents",
+                    "data": message_data
+                })
+            else:
+                logger.warning(f"⚠️ Could not extract user from userEvents: {message_data}")
         elif channel == "subscriptionResponse":
             logger.info(f"✅ Subscription confirmed: {message_data}")
         else:
-            # Forward other messages
-            await self.broadcast_to_clients({
+            # Forward other messages to all clients
+            await self.broadcast_to_all_clients({
                 "type": "hyperliquidMessage",
                 "channel": channel,
                 "data": message_data
             })
     
-    async def broadcast_to_clients(self, message):
-        """Broadcast message to all connected clients"""
+    def extract_user_from_data(self, data) -> str:
+        """Extract user address from Hyperliquid message data"""
+        if isinstance(data, dict):
+            # Try different possible locations for user address
+            user = data.get('user') or data.get('userAddress')
+            if user:
+                return user.lower()
+            
+            # Check nested structures
+            if 'clearinghouseState' in data:
+                return self.extract_user_from_data(data['clearinghouseState'])
+            
+            # Check if there's a fills array with user info
+            if 'fills' in data and data['fills']:
+                fill = data['fills'][0]
+                user = fill.get('user') or fill.get('userAddress')
+                if user:
+                    return user.lower()
+        
+        return None
+    
+    async def broadcast_to_all_clients(self, message):
+        """Broadcast message to all connected clients (for public data)"""
         if not self.client_connections:
             return
             
@@ -142,7 +174,38 @@ class HyperliquidWebSocketManager:
                 disconnected_clients.add(client)
         
         # Remove disconnected clients
-        self.client_connections -= disconnected_clients
+        await self._cleanup_disconnected_clients(disconnected_clients)
+    
+    async def broadcast_to_user_clients(self, user_address: str, message):
+        """Broadcast message only to clients subscribed to specific user"""
+        if not self.client_connections:
+            return
+        
+        message_str = json.dumps(message)
+        disconnected_clients = set()
+        sent_count = 0
+        
+        for client in self.client_connections:
+            try:
+                if client.client_state == WebSocketState.CONNECTED:
+                    # Check if this client is subscribed to this user
+                    client_subs = self.client_subscriptions.get(client, {})
+                    if client_subs.get('userAddress') == user_address:
+                        await client.send_text(message_str)
+                        sent_count += 1
+                else:
+                    disconnected_clients.add(client)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to send user data to client: {e}")
+                disconnected_clients.add(client)
+        
+        logger.debug(f"📤 Sent user data for {user_address} to {sent_count} clients")
+        await self._cleanup_disconnected_clients(disconnected_clients)
+    
+    async def _cleanup_disconnected_clients(self, disconnected_clients):
+        """Clean up disconnected clients and their subscriptions"""
+        for client in disconnected_clients:
+            await self.remove_client(client)
     
     async def add_client(self, websocket: WebSocket):
         """Add a new client connection"""
@@ -157,8 +220,30 @@ class HyperliquidWebSocketManager:
         }))
     
     async def remove_client(self, websocket: WebSocket):
-        """Remove a client connection"""
+        """Remove a client connection and clean up subscriptions"""
         self.client_connections.discard(websocket)
+        
+        # Clean up client subscriptions
+        if websocket in self.client_subscriptions:
+            client_subs = self.client_subscriptions[websocket]
+            user_address = client_subs.get('userAddress')
+            
+            # Check if any other clients are still subscribed to this user
+            if user_address:
+                still_subscribed = any(
+                    subs.get('userAddress') == user_address 
+                    for client, subs in self.client_subscriptions.items() 
+                    if client != websocket and client in self.client_connections
+                )
+                
+                if not still_subscribed:
+                    # No other clients subscribed to this user - unsubscribe from Hyperliquid
+                    await self.unsubscribe_user_from_hyperliquid(user_address)
+                    self.subscribed_users.discard(user_address)
+                    logger.info(f"🚫 Unsubscribed {user_address} from Hyperliquid (no more clients)")
+            
+            del self.client_subscriptions[websocket]
+            
         logger.info(f"📱 Client disconnected. Total clients: {len(self.client_connections)}")
     
     async def handle_client_message(self, websocket: WebSocket, message: str):
@@ -170,6 +255,8 @@ class HyperliquidWebSocketManager:
             
             if message_type == "subscribe_user_data":
                 await self.handle_user_data_subscription(websocket, payload)
+            elif message_type == "unsubscribe_user_data":
+                await self.handle_user_data_unsubscription(websocket, payload)
             elif message_type == "subscribe_candles":
                 await self.handle_candle_subscription(websocket, payload)
             elif message_type == "unsubscribe":
@@ -189,7 +276,7 @@ class HyperliquidWebSocketManager:
             logger.error(f"❌ Error handling client message: {e}")
     
     async def handle_user_data_subscription(self, websocket: WebSocket, payload):
-        """Handle user data subscription"""
+        """Handle user data subscription with proper client isolation"""
         user_address = payload.get("userAddress")
         if not user_address:
             await websocket.send_text(json.dumps({
@@ -197,27 +284,44 @@ class HyperliquidWebSocketManager:
             }))
             return
         
-        logger.info(f"👤 Subscribing to user data for: {user_address}")
+        user_address = user_address.lower()  # Normalize address
+        logger.info(f"👤 Client subscribing to user data for: {user_address}")
         
-        # Subscribe to webData2 and userEvents
-        subscriptions = [
-            {
-                "method": "subscribe",
-                "subscription": {"type": "webData2", "user": user_address}
-            },
-            {
-                "method": "subscribe", 
-                "subscription": {"type": "userEvents", "user": user_address}
-            }
-        ]
+        # Remove previous subscription for this client if exists
+        if websocket in self.client_subscriptions:
+            old_user = self.client_subscriptions[websocket].get('userAddress')
+            if old_user and old_user != user_address:
+                logger.info(f"🔄 Client switching from {old_user} to {user_address}")
+                # Clean up old subscription if no other clients use it
+                await self._cleanup_user_subscription(old_user, websocket)
         
-        for sub in subscriptions:
-            await self.subscribe_to_hyperliquid(sub)
+        # Store client subscription
+        self.client_subscriptions[websocket] = {
+            'userAddress': user_address,
+            'subscriptions': ['webData2', 'userEvents']
+        }
         
-        # Store subscription for this user
-        if user_address not in self.subscriptions:
-            self.subscriptions[user_address] = []
-        self.subscriptions[user_address].extend(subscriptions)
+        # Only subscribe to Hyperliquid if not already subscribed for this user
+        if user_address not in self.subscribed_users:
+            logger.info(f"📡 New user subscription - subscribing to Hyperliquid for: {user_address}")
+            
+            subscriptions = [
+                {
+                    "method": "subscribe",
+                    "subscription": {"type": "webData2", "user": user_address}
+                },
+                {
+                    "method": "subscribe", 
+                    "subscription": {"type": "userEvents", "user": user_address}
+                }
+            ]
+            
+            for sub in subscriptions:
+                await self.subscribe_to_hyperliquid(sub)
+            
+            self.subscribed_users.add(user_address)
+        else:
+            logger.info(f"📡 User {user_address} already subscribed in Hyperliquid - reusing subscription")
         
         await websocket.send_text(json.dumps({
             "type": "subscription_confirmed",
@@ -226,6 +330,64 @@ class HyperliquidWebSocketManager:
                 "subscriptions": ["webData2", "userEvents"]
             }
         }))
+    
+    async def _cleanup_user_subscription(self, user_address: str, excluding_client: WebSocket = None):
+        """Check if user subscription can be cleaned up"""
+        still_subscribed = any(
+            subs.get('userAddress') == user_address 
+            for client, subs in self.client_subscriptions.items() 
+            if client != excluding_client and client in self.client_connections
+        )
+        
+        if not still_subscribed and user_address in self.subscribed_users:
+            await self.unsubscribe_user_from_hyperliquid(user_address)
+            self.subscribed_users.discard(user_address)
+            logger.info(f"🚫 Cleaned up Hyperliquid subscription for {user_address}")
+    
+    async def unsubscribe_user_from_hyperliquid(self, user_address: str):
+        """Unsubscribe user from Hyperliquid"""
+        unsubscriptions = [
+            {
+                "method": "unsubscribe",
+                "subscription": {"type": "webData2", "user": user_address}
+            },
+            {
+                "method": "unsubscribe", 
+                "subscription": {"type": "userEvents", "user": user_address}
+            }
+        ]
+        
+        for unsub in unsubscriptions:
+            await self.subscribe_to_hyperliquid(unsub)  # Note: using same method for unsub
+    
+    async def handle_user_data_unsubscription(self, websocket: WebSocket, payload):
+        """Handle user data unsubscription"""
+        user_address = payload.get("userAddress")
+        if not user_address:
+            await websocket.send_text(json.dumps({
+                "error": "User address required"
+            }))
+            return
+        
+        user_address = user_address.lower()
+        logger.info(f"🚫 Client unsubscribing from user data for: {user_address}")
+        
+        # Remove client subscription
+        if websocket in self.client_subscriptions:
+            client_subs = self.client_subscriptions[websocket]
+            if client_subs.get('userAddress') == user_address:
+                del self.client_subscriptions[websocket]
+                
+                # Check if we need to unsubscribe from Hyperliquid
+                await self._cleanup_user_subscription(user_address, websocket)
+                
+                await websocket.send_text(json.dumps({
+                    "type": "unsubscription_confirmed",
+                    "data": {
+                        "userAddress": user_address,
+                        "unsubscribed": ["webData2", "userEvents"]
+                    }
+                }))
     
     async def handle_candle_subscription(self, websocket: WebSocket, payload):
         """Handle candle data subscription"""
