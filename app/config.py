@@ -25,7 +25,8 @@ class Settings(BaseSettings):
             "http://localhost:5173",  # Vite dev server
             "http://localhost:3000",  # Create React App
             "http://127.0.0.1:5173",
-            "http://127.0.0.1:3000"
+            "http://127.0.0.1:3000",
+            "https://hyperswipe-client.vercel.app"  # Production client
         ]
     )
     

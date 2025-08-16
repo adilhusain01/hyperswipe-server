@@ -47,6 +47,7 @@ services:
       - ./nginx/logs:/var/log/nginx
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/lib/letsencrypt
+      - certbot-webroot:/var/www/html
     networks:
       - hyperswipe-network
     depends_on:
@@ -64,7 +65,8 @@ services:
     volumes:
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/lib/letsencrypt
-      - ./nginx/webroot:/var/www/html
+    #  - ./nginx/webroot:/var/www/html
+      - certbot-webroot:/var/www/html
     depends_on:
       - nginx
     command: certonly --webroot --webroot-path=/var/www/html --email admin@hyperswipe.rizzmo.site --agree-tos --no-eff-email --staging -d app.hyperswipe.rizzmo.site -d www.app.hyperswipe.rizzmo.site
@@ -101,6 +103,7 @@ services:
 volumes:
   certbot-etc:
   certbot-var:
+  certbot-webroot:
   redis-data:
 
 networks:
