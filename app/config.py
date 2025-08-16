@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     
+    # Telegram Bot
+    telegram_bot_token: str = Field(default="", description="Telegram bot token for notifications")
+    
+    # MongoDB Atlas
+    mongodb_url: str = Field(default="", description="MongoDB Atlas connection string")
+    mongodb_database: str = Field(default="hyperswipe", description="MongoDB database name")
+    
     @field_validator('cors_origins', mode='before')
     @classmethod
     def parse_cors_origins(cls, v):

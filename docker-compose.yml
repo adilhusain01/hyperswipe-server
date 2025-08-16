@@ -18,6 +18,8 @@ services:
       - HYPERLIQUID_TESTNET=true
       - HYPERLIQUID_BASE_URL=https://api.hyperliquid-testnet.xyz
       - RATE_LIMIT_PER_MINUTE=100
+      - TELEGRAM_BOT_TOKEN=8392847966:AAHBLWAUoGFGBzgix1wVpbfyQYmCXl2zO54
+      - MONGODB_URL=mongodb+srv://adil:adil@cluster0.c7ulwvj.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
     ports:
       - "8081:8081"
     volumes:

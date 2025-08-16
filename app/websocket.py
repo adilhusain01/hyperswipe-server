@@ -122,6 +122,9 @@ class HyperliquidWebSocketManager:
                     "type": "userEvents",
                     "data": message_data
                 })
+                
+                # Send Telegram notifications for fills
+                await self.handle_user_events_for_telegram(user_address, message_data)
             else:
                 logger.warning(f"⚠️ Could not extract user from userEvents: {message_data}")
         elif channel == "subscriptionResponse":
@@ -424,6 +427,43 @@ class HyperliquidWebSocketManager:
             }
             await self.subscribe_to_hyperliquid(unsubscribe_msg)
             logger.info(f"🚫 Unsubscribed from: {subscription}")
+    
+    async def handle_user_events_for_telegram(self, user_address: str, data):
+        """Handle user events and send Telegram notifications for fills"""
+        try:
+            from app.services.telegram import get_telegram_service
+            
+            telegram_service = get_telegram_service()
+            if not telegram_service:
+                return
+            
+            # Check if this is a fill event
+            if isinstance(data, dict) and 'fills' in data:
+                fills = data['fills']
+                if fills and isinstance(fills, list):
+                    for fill in fills:
+                        # Extract fill information
+                        coin = fill.get('coin', 'Unknown')
+                        side = fill.get('side', 'Unknown')
+                        px = fill.get('px', '0')
+                        sz = fill.get('sz', '0')
+                        fee = fill.get('fee', '0')
+                        
+                        logger.info(f"📈 Processing fill notification for {user_address}: {coin} {side} {sz}@{px}")
+                        
+                        # Send Telegram notification
+                        await telegram_service.send_position_fill_alert(user_address, {
+                            'coin': coin,
+                            'side': side,
+                            'px': px,
+                            'sz': sz,
+                            'fee': fee
+                        })
+                        
+                        logger.info(f"✅ Sent Telegram fill notification for {user_address}")
+                        
+        except Exception as e:
+            logger.error(f"❌ Error sending Telegram notification: {e}")
 
 # Global WebSocket manager instance
 ws_manager = HyperliquidWebSocketManager()

@@ -9,8 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
 from app.middleware import SecurityMiddleware, LoggingMiddleware
-from app.routes import health, signing
+from app.routes import health, signing, telegram
 from app.websocket import ws_manager
+from app.services.telegram import initialize_telegram_service, cleanup_telegram_service
+from app.services.database import init_database, cleanup_database
 
 # Configure logging
 logging.basicConfig(
@@ -29,14 +31,33 @@ async def lifespan(app: FastAPI):
     logger.info(f"Hyperliquid Testnet: {settings.hyperliquid_testnet}")
     logger.info(f"CORS Origins: {settings.cors_origins}")
     
+    # Initialize database
+    await init_database()
+    
     # Start WebSocket connection to Hyperliquid
     await ws_manager.connect_to_hyperliquid()
     logger.info("📡 WebSocket manager initialized")
+    
+    # Initialize Telegram service
+    telegram_token = getattr(settings, 'telegram_bot_token', None)
+    if telegram_token:
+        await initialize_telegram_service(telegram_token)
+        logger.info("🤖 Telegram service initialized")
+    else:
+        logger.warning("⚠️ Telegram bot token not configured")
     
     yield
     
     # Shutdown
     logger.info("🛑 Shutting down HyperSwipe Signing Service")
+    
+    # Cleanup Telegram service
+    await cleanup_telegram_service()
+    logger.info("🤖 Telegram service stopped")
+    
+    # Cleanup database
+    await cleanup_database()
+    
     if ws_manager.hyperliquid_ws:
         await ws_manager.hyperliquid_ws.close()
         logger.info("🔌 Hyperliquid WebSocket connection closed")
@@ -95,6 +116,7 @@ app.add_middleware(SecurityMiddleware, api_key_header=settings.api_key_header)
 # Include routers
 app.include_router(health.router)
 app.include_router(signing.router)
+app.include_router(telegram.router)
 
 # WebSocket endpoints
 @app.websocket("/ws")
