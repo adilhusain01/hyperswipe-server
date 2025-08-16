@@ -14,7 +14,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8081
       - LOG_LEVEL=INFO
-      - CORS_ORIGINS=https://app.hyperswipe.rizzmo.site,https://www.app.hyperswipe.rizzmo.site
+      - CORS_ORIGINS=https://app.hyperswipe.rizzmo.site,https://www.app.hyperswipe.rizzmo.site,https://hyperswipe.vercel.app
       - HYPERLIQUID_TESTNET=true
       - HYPERLIQUID_BASE_URL=https://api.hyperliquid-testnet.xyz
       - RATE_LIMIT_PER_MINUTE=100
