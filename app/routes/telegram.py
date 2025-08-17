@@ -19,7 +19,7 @@ class TelegramLinkRequest(BaseModel):
 
 class TelegramTestRequest(BaseModel):
     wallet_address: str
-    message_type: str = "welcome"  # welcome, pnl_alert, fill, liquidation_warning
+    message_type: str = "welcome"  # welcome, pnl_alert, fill, liquidation_warning, daily_portfolio
 
 @router.post("/link")
 async def link_telegram_account(request: TelegramLinkRequest):
@@ -105,6 +105,20 @@ async def test_telegram_notification(request: TelegramTestRequest):
             success = await telegram_service.send_position_fill_alert(request.wallet_address, mock_fill)
         elif request.message_type == "liquidation_warning":
             success = await telegram_service.send_liquidation_warning(request.wallet_address, 15.2)
+        elif request.message_type == "daily_portfolio":
+            # Mock portfolio data for testing
+            mock_portfolio = {
+                "accountValue": "15420.75",
+                "totalPnl": "125.80",
+                "openPositions": [
+                    {"coin": "BTC", "size": 0.05, "unrealizedPnl": 45.20},
+                    {"coin": "ETH", "size": 2.5, "unrealizedPnl": -12.30},
+                    {"coin": "SOL", "size": 15.0, "unrealizedPnl": 92.90}
+                ],
+                "dailyVolume": "8750.25",
+                "tradesCount": 12
+            }
+            success = await telegram_service.send_daily_portfolio_summary(request.wallet_address, mock_portfolio)
         else:
             raise HTTPException(
                 status_code=400,

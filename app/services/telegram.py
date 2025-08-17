@@ -178,15 +178,8 @@ class TelegramService:
 
 ⏰ {self._get_timestamp()}"""
             
-            # Action buttons for closed position
-            buttons = {
-                "inline_keyboard": [
-                    [
-                        {"text": "📊 View Portfolio", "url": f"https://app.hyperswipe.rizzmo.site"},
-                        {"text": "🔄 Trade Again", "url": f"https://app.hyperswipe.rizzmo.site"}
-                    ]
-                ]
-            }
+            # No buttons for position close notifications
+            buttons = None
         else:
             # Handle regular PnL alert for active position
             side = "Long 📈" if position_size > 0 else "Short 📉"
@@ -215,17 +208,8 @@ class TelegramService:
 
 ⏰ {self._get_timestamp()}"""
             
-            # Add action buttons for significant moves
+            # No buttons for PnL alerts
             buttons = None
-            if abs(pnl_percentage) > 5:  # Show actions for >5% moves
-                buttons = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "📈 View Chart", "url": f"https://app.hyperswipe.rizzmo.site"},
-                            {"text": "⚡ Close Position", "callback_data": f"close_{coin}"}
-                        ]
-                    ]
-                }
         
         return await self.send_message(chat_id, message, reply_markup=buttons)
     
@@ -250,7 +234,7 @@ class TelegramService:
 
 ⏰ {self._get_timestamp()}"""
         
-        return await self.send_message(chat_id, message)
+        return await self.send_message(chat_id, message, reply_markup=None)
     
     async def send_liquidation_warning(self, wallet_address: str, margin_ratio: float):
         """Send liquidation warning"""
@@ -270,14 +254,8 @@ Consider:
 
 ⏰ {self._get_timestamp()}"""
         
-        buttons = {
-            "inline_keyboard": [
-                [
-                    {"text": "🏃 View Positions", "url": "https://app.hyperswipe.rizzmo.site"},
-                    {"text": "💰 Add Margin", "callback_data": "add_margin"}
-                ]
-            ]
-        }
+        # No buttons for liquidation warnings
+        buttons = None
         
         return await self.send_message(chat_id, message, reply_markup=buttons)
     
@@ -298,10 +276,60 @@ You'll receive notifications for:
         buttons = {
             "inline_keyboard": [
                 [
-                    {"text": "📱 Open HyperSwipe", "url": "https://app.hyperswipe.rizzmo.site"}
+                    {"text": "📱 Open HyperSwipe", "url": "https://hyperswipe.vercel.app"}
                 ]
             ]
         }
+        
+        return await self.send_message(chat_id, message, reply_markup=buttons)
+    
+    async def send_daily_portfolio_summary(self, wallet_address: str, portfolio_data: dict):
+        """Send daily portfolio summary notification"""
+        chat_id = await self.get_user_chat_id(wallet_address)
+        if not chat_id:
+            return False
+        
+        # Extract portfolio data
+        total_equity = float(portfolio_data.get('accountValue', 0))
+        total_pnl = float(portfolio_data.get('totalPnl', 0))
+        open_positions = portfolio_data.get('openPositions', [])
+        daily_volume = float(portfolio_data.get('dailyVolume', 0))
+        trades_count = int(portfolio_data.get('tradesCount', 0))
+        
+        # Calculate portfolio performance
+        pnl_emoji = "📈" if total_pnl >= 0 else "📉"
+        pnl_sign = "+" if total_pnl >= 0 else ""
+        
+        # Format positions summary
+        positions_text = ""
+        if open_positions:
+            positions_text = "\n\n📊 **Open Positions:**"
+            for pos in open_positions[:5]:  # Show top 5 positions
+                coin = pos.get('coin', 'Unknown')
+                size = float(pos.get('size', 0))
+                pnl = float(pos.get('unrealizedPnl', 0))
+                pnl_sign_pos = "+" if pnl >= 0 else ""
+                positions_text += f"\n• {coin}: {size:.4f} ({pnl_sign_pos}${pnl:.2f})"
+            
+            if len(open_positions) > 5:
+                positions_text += f"\n• ... and {len(open_positions) - 5} more"
+        else:
+            positions_text = "\n\n💤 **No open positions**"
+        
+        message = f"""📊 **Daily Portfolio Summary**
+
+💰 **Account Overview**
+• Total Equity: ${total_equity:,.2f}
+• Daily P&L: {pnl_sign}${total_pnl:.2f} {pnl_emoji}
+• Daily Volume: ${daily_volume:,.2f}
+• Trades Today: {trades_count}
+
+{positions_text}
+
+🗓️ **{self._get_current_date()}**"""
+        
+        # No buttons for daily portfolio summaries
+        buttons = None
         
         return await self.send_message(chat_id, message, reply_markup=buttons)
     
@@ -309,6 +337,11 @@ You'll receive notifications for:
         """Get formatted timestamp"""
         from datetime import datetime
         return datetime.now().strftime("%H:%M:%S UTC")
+    
+    def _get_current_date(self) -> str:
+        """Get formatted current date"""
+        from datetime import datetime
+        return datetime.now().strftime('%B %d, %Y')
 
 # Global Telegram service instance
 telegram_service: Optional[TelegramService] = None

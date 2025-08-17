@@ -23,6 +23,9 @@ class FillNotificationService:
         self.is_running = False
         self.polling_task: Optional[asyncio.Task] = None
         
+        # Track service start time to avoid historical notification spam
+        self.service_start_time = datetime.utcnow()
+        
         # Track last seen fill timestamp per user to avoid duplicates
         self.last_fill_timestamps: Dict[str, int] = {}
         
@@ -41,8 +44,9 @@ class FillNotificationService:
             # Start API client
             await self.api_client.start()
             
-            # Refresh registered users
+            # Refresh registered users and initialize timestamps to prevent spam
             await self._refresh_registered_users()
+            await self._initialize_user_timestamps()
             
             # Start polling task
             self.polling_task = asyncio.create_task(self._polling_loop())
@@ -100,6 +104,22 @@ class FillNotificationService:
             
         except Exception as e:
             logger.error(f"❌ Error refreshing registered users: {e}")
+    
+    async def _initialize_user_timestamps(self):
+        """Initialize user timestamps to service start time to prevent historical spam"""
+        try:
+            service_start_timestamp = int(self.service_start_time.timestamp() * 1000)
+            
+            for user_address in self.registered_users:
+                if user_address not in self.last_fill_timestamps:
+                    # Set to service start time to only track new fills from now on
+                    self.last_fill_timestamps[user_address] = service_start_timestamp
+                    logger.debug(f"🕒 Initialized timestamp for {user_address} to service start time")
+            
+            logger.info(f"⏰ Initialized {len(self.registered_users)} users to track fills from service start time only")
+            
+        except Exception as e:
+            logger.error(f"❌ Error initializing user timestamps: {e}")
     
     async def _polling_loop(self):
         """Main polling loop for fill notifications"""

@@ -15,6 +15,7 @@ from app.services.telegram import initialize_telegram_service, cleanup_telegram_
 from app.services.database import init_database, cleanup_database
 from app.services.order_tracking_service import initialize_order_tracking_service, cleanup_order_tracking_service
 from app.services.fill_notification_service import initialize_fill_notification_service, cleanup_fill_notification_service
+from app.services.daily_portfolio_service import initialize_daily_portfolio_service, cleanup_daily_portfolio_service
 
 # Configure logging
 logging.basicConfig(
@@ -70,10 +71,26 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Failed to initialize fill notification service: {e}")
         # Continue without fill notifications
     
+    # Initialize daily portfolio service
+    try:
+        await initialize_daily_portfolio_service(
+            settings.hyperliquid_base_url,
+            settings.hyperliquid_testnet,
+            notification_hour=9  # 9 AM UTC
+        )
+        logger.info("📊 Daily portfolio service initialized")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize daily portfolio service: {e}")
+        # Continue without daily summaries
+    
     yield
     
     # Shutdown
     logger.info("🛑 Shutting down HyperSwipe Signing Service")
+    
+    # Cleanup daily portfolio service
+    await cleanup_daily_portfolio_service()
+    logger.info("📊 Daily portfolio service stopped")
     
     # Cleanup fill notification service
     await cleanup_fill_notification_service()
