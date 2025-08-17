@@ -495,5 +495,99 @@ Note: Non-funding ledger updates include deposits, transfers, and withdrawals.
   "markPx": "4.4716"
 }
 ```
+
+
+  endpoint -> https://api.hyperliquid-testnet.xyz/info, in body -> {
+      "type": "userFills",
+      "user": "0x36fD41533d1c86225BDA5FB4E0bC0a8CD22D3180"
+  } , output -> [
+      {
+          "coin": "ETH",
+          "px": "4414.9",
+          "sz": "0.0227",
+          "side": "A",
+          "time": 1755371191858,
+          "startPosition": "0.0227",
+          "dir": "Close Long",
+          "closedPnl": "0.03405",
+          "hash": "0x23df8a33e79d1ff20d280418dadad1010400b76ddc74259ecb89882dda2bb768",
+          "oid": 37688457474,
+          "crossed": true,
+          "fee": "0.045098",
+          "tid": 522854775870738,
+          "feeToken": "USDC",
+          "twapId": null
+      },{
+          "coin": "ETH",
+          "px": "4413.4",
+          "sz": "0.0227",
+          "side": "B",
+          "time": 1755370974227,
+          "startPosition": "0.0",
+          "dir": "Open Long",
+          "closedPnl": "0.0",
+          "hash": "0x91211fb62258a172be220418dad5b4010d00c312cd84950a1012aeaab1ec475d",
+          "oid": 37688405638,
+          "crossed": true,
+          "fee": "0.045082",
+          "tid": 195502678643915,
+          "feeToken": "USDC",
+          "twapId": null
+      },
+      {
+          "coin": "ETH",
+          "px": "4410.0",
+          "sz": "0.0113",
+          "side": "A",
+          "time": 1755370620914,
+          "startPosition": "0.0113",
+          "dir": "Close Long",
+          "closedPnl": "-0.0339",
+          "hash": "0xcb01958bd88e45bd38780418dacd58011b00d8e9d7e22bce5bd76863160fec92",
+          "oid": 37688323761,
+          "crossed": true,
+          "fee": "0.022424",
+          "tid": 329008640192765,
+          "feeToken": "USDC",
+          "twapId": null
+      },
+      {
+          "coin": "ETH",
+          "px": "4413.0",
+          "sz": "0.0113",
+          "side": "B",
+          "time": 1755370544160,
+          "startPosition": "0.0",
+          "dir": "Open Long",
+          "closedPnl": "0.0",
+          "hash": "0x03bb408b667f9729999d0418dacb83011a00fb26fffceb4e0519c07872872ae4",
+          "oid": 37688311026,
+          "crossed": true,
+          "fee": "0.02244",
+          "tid": 65328027284260,
+          "feeToken": "USDC",
+          "twapId": null
+      },
+      {
+          "coin": "ETH",
+          "px": "4409.9",
+          "sz": "0.0453",
+          "side": "A",
+          "time": 1755369122845,
+          "startPosition": "0.0453",
+          "dir": "Close Long",
+          "closedPnl": "-0.03171",
+          "hash": "0xdac62c9cfb23fe6096150418daaa21011500a06490db0e23ce3c9fb77d75d817",
+          "oid": 37687960772,
+          "crossed": true,
+          "fee": "0.089895",
+          "tid": 690832171092493,
+          "feeToken": "USDC",
+          "twapId": null
+      }
+  ]
+
+
+
 {% endtab %}
 {% endtabs %}
