@@ -9,10 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
 from app.middleware import SecurityMiddleware, LoggingMiddleware
-from app.routes import health, signing, telegram
+from app.routes import health, signing, telegram, order_tracking
 from app.websocket import ws_manager
 from app.services.telegram import initialize_telegram_service, cleanup_telegram_service
 from app.services.database import init_database, cleanup_database
+from app.services.order_tracking_service import initialize_order_tracking_service, cleanup_order_tracking_service
 
 # Configure logging
 logging.basicConfig(
@@ -46,10 +47,25 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("⚠️ Telegram bot token not configured")
     
+    # Initialize order tracking service
+    try:
+        await initialize_order_tracking_service(
+            settings.hyperliquid_base_url, 
+            settings.hyperliquid_testnet
+        )
+        logger.info("📊 Order tracking service initialized")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize order tracking service: {e}")
+        # Continue without order tracking
+    
     yield
     
     # Shutdown
     logger.info("🛑 Shutting down HyperSwipe Signing Service")
+    
+    # Cleanup order tracking service
+    await cleanup_order_tracking_service()
+    logger.info("📊 Order tracking service stopped")
     
     # Cleanup Telegram service
     await cleanup_telegram_service()
@@ -117,6 +133,7 @@ app.add_middleware(SecurityMiddleware, api_key_header=settings.api_key_header)
 app.include_router(health.router)
 app.include_router(signing.router)
 app.include_router(telegram.router)
+app.include_router(order_tracking.router)
 
 # WebSocket endpoints
 @app.websocket("/ws")

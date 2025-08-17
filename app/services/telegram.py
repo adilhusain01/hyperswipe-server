@@ -128,25 +128,81 @@ class TelegramService:
         
         # Extract position data
         coin = position_data.get('coin', 'Unknown')
-        side = "Long 📈" if float(position_data.get('szi', 0)) > 0 else "Short 📉"
         entry_price = float(position_data.get('entryPx', 0))
         current_price = float(position_data.get('markPrice', entry_price))
         unrealized_pnl = float(position_data.get('unrealizedPnl', 0))
-        size = abs(float(position_data.get('szi', 0)))
+        position_size = float(position_data.get('szi', 0))
+        size = abs(position_size)
         
-        # Calculate percentage change
-        pnl_percentage = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
-        if float(position_data.get('szi', 0)) < 0:  # Short position
-            pnl_percentage = -pnl_percentage
+        # Check if this is a position close notification
+        is_position_closed = position_data.get('positionClosed', False) or size == 0
         
-        # Determine alert emoji based on PnL
-        if unrealized_pnl > 0:
-            status_emoji = "🚀" if pnl_percentage > 10 else "📈"
+        if is_position_closed:
+            # Handle position close notification with enhanced data
+            closed_size = float(position_data.get('closedSize', size))
+            full_close = position_data.get('fullClose', True)
+            
+            # If we have a specific closed size, use it; otherwise use the position size
+            if closed_size > 0:
+                size = closed_size
+            
+            # Determine position side based on the trade
+            if position_size > 0:
+                side = "Long 📈"
+            elif position_size < 0:
+                side = "Short 📉"
+            else:
+                # For close notifications, infer from entry vs exit price or use closed size
+                side = "Position"
+            
+            # Determine status emoji based on final PnL
+            if unrealized_pnl > 0:
+                status_emoji = "🎉"
+            elif unrealized_pnl < 0:
+                status_emoji = "😔"
+            else:
+                status_emoji = "⚡"
+            
+            close_type = "Full" if full_close else "Partial"
+            
+            message = f"""{status_emoji} **{close_type} Position Closed!**
+
+🎯 **{coin}/USD {side}**
+• Entry: ${entry_price:,.4f}
+• Exit: ${current_price:,.4f}
+• Price Change: {((current_price - entry_price) / entry_price * 100):+.2f}%
+
+💰 **Final P&L**
+• Realized: {"+" if unrealized_pnl >= 0 else ""}${unrealized_pnl:,.2f}
+• Closed Size: {closed_size:.4f} {coin}
+
+⏰ {self._get_timestamp()}"""
+            
+            # Action buttons for closed position
+            buttons = {
+                "inline_keyboard": [
+                    [
+                        {"text": "📊 View Portfolio", "url": f"https://app.hyperswipe.rizzmo.site"},
+                        {"text": "🔄 Trade Again", "url": f"https://app.hyperswipe.rizzmo.site"}
+                    ]
+                ]
+            }
         else:
-            status_emoji = "🔥" if pnl_percentage < -10 else "📉"
-        
-        # Format the message
-        message = f"""{status_emoji} **{coin}/USD {side}**
+            # Handle regular PnL alert for active position
+            side = "Long 📈" if position_size > 0 else "Short 📉"
+            
+            # Calculate percentage change
+            pnl_percentage = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+            if position_size < 0:  # Short position
+                pnl_percentage = -pnl_percentage
+            
+            # Determine alert emoji based on PnL
+            if unrealized_pnl > 0:
+                status_emoji = "🚀" if pnl_percentage > 10 else "📈"
+            else:
+                status_emoji = "🔥" if pnl_percentage < -10 else "📉"
+            
+            message = f"""{status_emoji} **{coin}/USD {side}**
 
 📊 **Position Update**
 • Entry: ${entry_price:,.4f}
@@ -158,18 +214,18 @@ class TelegramService:
 • Size: {size:.4f} {coin}
 
 ⏰ {self._get_timestamp()}"""
-        
-        # Add action buttons for significant moves
-        buttons = None
-        if abs(pnl_percentage) > 5:  # Show actions for >5% moves
-            buttons = {
-                "inline_keyboard": [
-                    [
-                        {"text": "📈 View Chart", "url": f"https://app.hyperswipe.rizzmo.site"},
-                        {"text": "⚡ Close Position", "callback_data": f"close_{coin}"}
+            
+            # Add action buttons for significant moves
+            buttons = None
+            if abs(pnl_percentage) > 5:  # Show actions for >5% moves
+                buttons = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "📈 View Chart", "url": f"https://app.hyperswipe.rizzmo.site"},
+                            {"text": "⚡ Close Position", "callback_data": f"close_{coin}"}
+                        ]
                     ]
-                ]
-            }
+                }
         
         return await self.send_message(chat_id, message, reply_markup=buttons)
     

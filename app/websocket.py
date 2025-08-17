@@ -98,6 +98,10 @@ class HyperliquidWebSocketManager:
         channel = data.get("channel")
         message_data = data.get("data")
         
+        # Debug: Log all incoming messages for troubleshooting
+        if channel in ["webData2", "userEvents"]:
+            logger.info(f"🔍 DEBUG: Received {channel} data: {message_data}")
+        
         if channel == "allMids":
             # Broadcast price updates to all clients (public data)
             await self.broadcast_to_all_clients({
@@ -112,18 +116,26 @@ class HyperliquidWebSocketManager:
                     "type": "userDataUpdate", 
                     "data": message_data
                 })
+                
+                # Send Telegram notifications for position changes
+                await self.handle_position_updates_for_telegram(user_address, message_data)
             else:
                 logger.warning(f"⚠️ Could not extract user from webData2: {message_data}")
         elif channel == "userEvents":
             # Send user events only to clients subscribed to this specific user
             user_address = self.extract_user_from_data(message_data)
+            logger.info(f"🔍 DEBUG: userEvents - extracted user: {user_address}")
             if user_address:
                 await self.broadcast_to_user_clients(user_address, {
                     "type": "userEvents",
                     "data": message_data
                 })
                 
+                # Send to order tracking service
+                await self._forward_to_order_tracking(user_address, message_data)
+                
                 # Send Telegram notifications for fills
+                logger.info(f"🔍 DEBUG: Calling handle_user_events_for_telegram for {user_address}")
                 await self.handle_user_events_for_telegram(user_address, message_data)
             else:
                 logger.warning(f"⚠️ Could not extract user from userEvents: {message_data}")
@@ -429,7 +441,7 @@ class HyperliquidWebSocketManager:
             logger.info(f"🚫 Unsubscribed from: {subscription}")
     
     async def handle_user_events_for_telegram(self, user_address: str, data):
-        """Handle user events and send Telegram notifications for fills"""
+        """Handle user events and send Telegram notifications - ROBUST event-driven approach"""
         try:
             from app.services.telegram import get_telegram_service
             
@@ -437,33 +449,488 @@ class HyperliquidWebSocketManager:
             if not telegram_service:
                 return
             
+            # Check if user has registered their Telegram integration
+            chat_id = await telegram_service.get_user_chat_id(user_address)
+            if not chat_id:
+                logger.debug(f"🔍 No Telegram chat ID registered for {user_address} - skipping notifications")
+                return
+            
+            # Get user notification settings and trading stats
+            from app.models.database import NotificationSettings, TradingStats
+            notification_settings = await NotificationSettings.get_or_create(user_address)
+            trading_stats = await TradingStats.get_or_create(user_address)
+            
+            # Check if fill notifications are enabled
+            if not notification_settings.fill_notifications:
+                logger.debug(f"🔕 Fill notifications disabled for {user_address}")
+                return
+            
+            logger.info(f"🔍 DEBUG: userEvents data structure: {data}")
+            
             # Check if this is a fill event
             if isinstance(data, dict) and 'fills' in data:
                 fills = data['fills']
                 if fills and isinstance(fills, list):
+                    # Initialize position tracking for this user
+                    if not hasattr(self, 'user_position_tracker'):
+                        self.user_position_tracker = {}
+                    
+                    user_tracker_key = f"tracker_{user_address}"
+                    if user_tracker_key not in self.user_position_tracker:
+                        self.user_position_tracker[user_tracker_key] = {}
+                    
+                    user_tracker = self.user_position_tracker[user_tracker_key]
+                    
                     for fill in fills:
-                        # Extract fill information
+                        # Extract fill information with validation
                         coin = fill.get('coin', 'Unknown')
-                        side = fill.get('side', 'Unknown')
-                        px = fill.get('px', '0')
-                        sz = fill.get('sz', '0')
-                        fee = fill.get('fee', '0')
+                        side = fill.get('side', 'Unknown')  # 'B' for buy, 'S' for sell
+                        px = float(fill.get('px', '0'))
+                        sz = float(fill.get('sz', '0'))
+                        fee = float(fill.get('fee', '0'))
+                        fill_time = fill.get('time', 0)
                         
-                        logger.info(f"📈 Processing fill notification for {user_address}: {coin} {side} {sz}@{px}")
+                        # Calculate trade volume
+                        trade_volume = px * sz
                         
-                        # Send Telegram notification
-                        await telegram_service.send_position_fill_alert(user_address, {
+                        # Store this fill in our permanent fill history for accurate exit price calculation
+                        if not hasattr(self, 'user_fill_history'):
+                            self.user_fill_history = {}
+                        
+                        fill_history_key = f"fills_{user_address}"
+                        if fill_history_key not in self.user_fill_history:
+                            self.user_fill_history[fill_history_key] = []
+                        
+                        # Store the fill with timestamp for position close analysis
+                        self.user_fill_history[fill_history_key].append({
                             'coin': coin,
                             'side': side,
                             'px': px,
                             'sz': sz,
-                            'fee': fee
+                            'fee': fee,
+                            'time': fill_time,
+                            'volume': trade_volume
                         })
                         
-                        logger.info(f"✅ Sent Telegram fill notification for {user_address}")
+                        # Keep only recent fills (last 1000 fills per user)
+                        if len(self.user_fill_history[fill_history_key]) > 1000:
+                            self.user_fill_history[fill_history_key] = self.user_fill_history[fill_history_key][-1000:]
+                        
+                        logger.info(f"📊 FILL EVENT: {user_address} {coin} {side} {sz}@${px} vol=${trade_volume:.2f}")
+                        
+                        # Track position changes based on fills
+                        if coin not in user_tracker:
+                            user_tracker[coin] = {
+                                'net_size': 0.0,
+                                'avg_entry_price': 0.0,
+                                'total_cost': 0.0,
+                                'fills': []
+                            }
+                        
+                        position = user_tracker[coin]
+                        prev_size = position['net_size']
+                        
+                        # Update position based on fill side
+                        if side == 'B':  # Buy/Long
+                            position['total_cost'] += trade_volume
+                            position['net_size'] += sz
+                            if position['net_size'] > 0:
+                                position['avg_entry_price'] = position['total_cost'] / position['net_size']
+                        elif side == 'S':  # Sell/Short
+                            if prev_size > 0:  # Closing long position
+                                close_size = min(sz, prev_size)
+                                # Calculate PnL for the closed portion
+                                realized_pnl = close_size * (px - position['avg_entry_price'])
+                                
+                                # Send position close notification
+                                if close_size == prev_size:  # Full close
+                                    await self.send_position_close_notification(
+                                        user_address, coin, telegram_service, trading_stats,
+                                        notification_settings, close_size, position['avg_entry_price'], 
+                                        px, realized_pnl, full_close=True
+                                    )
+                                else:  # Partial close
+                                    await self.send_position_close_notification(
+                                        user_address, coin, telegram_service, trading_stats,
+                                        notification_settings, close_size, position['avg_entry_price'], 
+                                        px, realized_pnl, full_close=False
+                                    )
+                                
+                                # Update position
+                                position['net_size'] -= close_size
+                                if position['net_size'] <= 0:
+                                    position['total_cost'] = 0.0
+                                    position['avg_entry_price'] = 0.0
+                                else:
+                                    position['total_cost'] *= (position['net_size'] / prev_size)
+                                
+                                remaining_size = sz - close_size
+                                if remaining_size > 0:
+                                    # Opening short position with remaining size
+                                    position['net_size'] = -remaining_size
+                                    position['total_cost'] = remaining_size * px
+                                    position['avg_entry_price'] = px
+                            else:  # Opening or increasing short position
+                                position['total_cost'] += trade_volume
+                                position['net_size'] -= sz
+                                if position['net_size'] < 0:
+                                    position['avg_entry_price'] = position['total_cost'] / abs(position['net_size'])
+                        
+                        # Store fill details
+                        position['fills'].append({
+                            'side': side,
+                            'price': px,
+                            'size': sz,
+                            'fee': fee,
+                            'time': fill_time,
+                            'volume': trade_volume
+                        })
+                        
+                        # Send fill notification if above threshold
+                        if trade_volume >= notification_settings.min_notification_amount:
+                            await telegram_service.send_position_fill_alert(user_address, {
+                                'coin': coin,
+                                'side': 'Buy' if side == 'B' else 'Sell',
+                                'px': str(px),
+                                'sz': str(sz),
+                                'fee': str(fee)
+                            })
+                            
+                            await trading_stats.record_notification()
+                            logger.info(f"✅ Sent fill notification: {coin} {side} {sz}@${px}")
+                        
+                        # Always record trade stats
+                        await trading_stats.record_trade(volume=trade_volume, pnl=0.0)
+                        
+                        # Log current position state
+                        logger.info(f"📊 Position after fill: {coin} size={position['net_size']:.4f} avg_price=${position['avg_entry_price']:.4f}")
                         
         except Exception as e:
-            logger.error(f"❌ Error sending Telegram notification: {e}")
+            logger.error(f"❌ Error processing user events for Telegram: {e}", exc_info=True)
+    
+    async def send_position_close_notification(self, user_address: str, coin: str, telegram_service, 
+                                             trading_stats, notification_settings, close_size: float,
+                                             entry_price: float, exit_price: float, realized_pnl: float,
+                                             full_close: bool = True):
+        """Send position close notification with accurate data"""
+        try:
+            # Check minimum notification amount
+            if abs(realized_pnl) >= notification_settings.min_notification_amount:
+                close_type = "Full" if full_close else "Partial"
+                logger.info(f"🔔 {close_type} position close: {user_address} {coin} size={close_size:.4f} PnL=${realized_pnl:.2f}")
+                
+                # Create accurate close notification data
+                close_notification_data = {
+                    'coin': coin,
+                    'szi': '0' if full_close else str(-close_size),  # Negative for sell
+                    'unrealizedPnl': str(realized_pnl),
+                    'entryPx': str(entry_price),
+                    'markPrice': str(exit_price),
+                    'closedSize': str(close_size),
+                    'fullClose': full_close,
+                    'positionClosed': True
+                }
+                
+                # Send notification
+                await telegram_service.send_pnl_alert(user_address, close_notification_data)
+                await trading_stats.record_notification()
+                
+                logger.info(f"✅ Sent {close_type.lower()} position close notification for {user_address}: {coin}")
+            else:
+                logger.debug(f"🔕 Position close PnL ${realized_pnl:.2f} below threshold ${notification_settings.min_notification_amount}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error sending position close notification: {e}")
+    
+    async def handle_position_updates_for_telegram(self, user_address: str, data):
+        """Handle position updates and send Telegram notifications for significant PnL changes and position closes"""
+        try:
+            from app.services.telegram import get_telegram_service
+            
+            telegram_service = get_telegram_service()
+            if not telegram_service:
+                return
+            
+            # Check if user has registered their Telegram integration
+            chat_id = await telegram_service.get_user_chat_id(user_address)
+            if not chat_id:
+                logger.debug(f"🔍 No Telegram chat ID registered for {user_address} - skipping notifications")
+                return
+            
+            # Get user notification settings and trading stats
+            from app.models.database import NotificationSettings, TradingStats
+            notification_settings = await NotificationSettings.get_or_create(user_address)
+            trading_stats = await TradingStats.get_or_create(user_address)
+            
+            # Check if PnL notifications are enabled
+            if not notification_settings.pnl_notifications:
+                logger.debug(f"🔕 PnL notifications disabled for {user_address}")
+                return
+            
+            logger.info(f"📱 Processing position updates for registered Telegram user {user_address}")
+            
+            # Extract clearinghouse state
+            clearinghouse_state = data.get('clearinghouseState', data)
+            if not clearinghouse_state:
+                return
+            
+            # Get asset positions
+            asset_positions = clearinghouse_state.get('assetPositions', [])
+            logger.info(f"🔍 Found {len(asset_positions)} asset positions for {user_address}")
+            
+            # Initialize position tracking if not exists
+            if not hasattr(self, 'user_positions'):
+                self.user_positions = {}
+            if not hasattr(self, 'sent_notifications'):
+                self.sent_notifications = set()
+            
+            # Track current positions
+            current_positions = {}
+            
+            # Get previous positions for comparison
+            user_key = f"positions_{user_address}"
+            previous_positions = self.user_positions.get(user_key, {})
+            logger.info(f"🔍 Previous positions: {list(previous_positions.keys())}")
+            
+            # If we have no asset positions now, but had some before, those were closed
+            if not asset_positions and previous_positions:
+                logger.info(f"🔔 All positions closed for {user_address} - sending notifications")
+                for coin, prev_pos in previous_positions.items():
+                    prev_size = prev_pos.get('size', 0)
+                    if prev_size > 0:
+                        # Position was closed - send notification with accurate exit price
+                        prev_pnl = prev_pos.get('unrealized_pnl', 0)
+                        prev_entry_px = prev_pos.get('entry_px', 0)
+                        prev_position_size = prev_size
+                        
+                        # Get accurate exit price and PnL from Hyperliquid API
+                        exit_price = prev_entry_px  # fallback
+                        actual_closed_size = prev_position_size
+                        realized_pnl = prev_pnl  # fallback
+                        
+                        try:
+                            # Get recent close fills from API for accurate data
+                            from app.services.hyperliquid_api_client import HyperliquidAPIClient
+                            api_client = HyperliquidAPIClient("https://api.hyperliquid-testnet.xyz", is_testnet=True)
+                            await api_client.start()
+                            
+                            success, close_fills = await api_client.get_recent_close_fills(user_address, coin, minutes_back=10)
+                            
+                            if success and close_fills:
+                                # Get the most recent close fill
+                                latest_close = close_fills[0]
+                                exit_price = float(latest_close.get('px', prev_entry_px))
+                                actual_closed_size = float(latest_close.get('sz', prev_position_size))
+                                realized_pnl = float(latest_close.get('closedPnl', prev_pnl))
+                                
+                                logger.info(f"✅ Got accurate close data from API: {coin} exit=${exit_price:.4f} size={actual_closed_size:.4f} PnL=${realized_pnl:.4f}")
+                            else:
+                                logger.warning(f"⚠️ No recent close fills found via API for {coin}, using fallback values")
+                            
+                            await api_client.stop()
+                            
+                        except Exception as api_error:
+                            logger.error(f"❌ Failed to get close fills from API: {api_error}")
+                            # Continue with fallback values
+                        
+                        logger.info(f"🔔 Position closed for {user_address}: {coin} entry=${prev_entry_px:.4f} exit=${exit_price:.4f} size={actual_closed_size:.4f} PnL=${realized_pnl:.4f}")
+                        
+                        # Create close notification data with accurate prices and PnL
+                        close_notification_data = {
+                            'coin': coin,
+                            'szi': '0',
+                            'unrealizedPnl': str(realized_pnl),  # Use accurate realized PnL from API
+                            'entryPx': str(prev_entry_px),
+                            'markPrice': str(exit_price),
+                            'closedSize': str(actual_closed_size),
+                            'fullClose': True,
+                            'positionClosed': True
+                        }
+                        
+                        # Check minimum notification amount using accurate PnL
+                        if abs(realized_pnl) >= notification_settings.min_notification_amount:
+                            # Send position close notification
+                            await telegram_service.send_pnl_alert(user_address, close_notification_data)
+                            
+                            # Record notification in stats
+                            await trading_stats.record_notification()
+                            
+                            logger.info(f"✅ Sent position close notification for {user_address}: {coin}")
+                        else:
+                            logger.debug(f"🔕 Position close PnL ${realized_pnl:.4f} below threshold ${notification_settings.min_notification_amount} for {user_address}")
+                
+                # Clear stored positions since all are closed
+                self.user_positions[user_key] = {}
+                return
+            
+            # Skip processing if no positions to track
+            if not asset_positions:
+                logger.debug(f"🔍 No asset positions to process for {user_address}")
+                return
+            
+            # Check each position for significant PnL changes and track for close detection
+            for position in asset_positions:
+                if isinstance(position, dict) and 'position' in position:
+                    pos_data = position['position']
+                    
+                    # Extract position details
+                    coin = pos_data.get('coin', '')
+                    szi = pos_data.get('szi', '0')
+                    unrealized_pnl = float(pos_data.get('unrealizedPnl', 0))
+                    entry_px = float(pos_data.get('entryPx', 0))
+                    
+                    position_size = abs(float(szi))
+                    
+                    logger.info(f"📊 Processing position: {coin} size={position_size} PnL=${unrealized_pnl:.2f}")
+                    
+                    # Store current position state
+                    current_positions[coin] = {
+                        'size': position_size,
+                        'unrealized_pnl': unrealized_pnl,
+                        'entry_px': entry_px,
+                        'data': pos_data
+                    }
+                    
+                    # Only process active positions for PnL alerts
+                    if position_size > 0 and entry_px > 0:
+                        position_value = position_size * entry_px
+                        pnl_percentage = (unrealized_pnl / position_value) * 100 if position_value > 0 else 0
+                        
+                        # Send notification for significant PnL changes (±10%, ±25%, ±50%)
+                        significant_thresholds = [10, 25, 50]
+                        abs_pnl_pct = abs(pnl_percentage)
+                        
+                        for threshold in significant_thresholds:
+                            if abs_pnl_pct >= threshold:
+                                # Store the notification state to avoid spam
+                                notification_key = f"{user_address}_{coin}_{threshold}"
+                                
+                                if notification_key not in self.sent_notifications:
+                                    # Check minimum notification amount
+                                    if abs(unrealized_pnl) >= notification_settings.min_notification_amount:
+                                        logger.info(f"📊 Sending PnL alert for {user_address}: {coin} {pnl_percentage:+.1f}%")
+                                        
+                                        # Add current mark price for better formatting
+                                        enhanced_position_data = {
+                                            **pos_data,
+                                            'markPrice': pos_data.get('markPrice', entry_px)  # Use entry price as fallback
+                                        }
+                                        
+                                        await telegram_service.send_pnl_alert(user_address, enhanced_position_data)
+                                        
+                                        # Record notification in stats
+                                        await trading_stats.record_notification()
+                                        
+                                        # Mark as sent to prevent duplicates
+                                        self.sent_notifications.add(notification_key)
+                                        
+                                        logger.info(f"✅ Sent PnL threshold alert for {user_address}: {coin}")
+                                    else:
+                                        logger.debug(f"🔕 PnL ${unrealized_pnl:.2f} below threshold ${notification_settings.min_notification_amount} for {user_address}")
+                                    
+                                    # Only send for the highest threshold reached
+                                    break
+            
+            # Check for individual position closes (compare with previous state)
+            # Note: user_key and previous_positions already defined above
+            
+            for coin, prev_pos in previous_positions.items():
+                current_pos = current_positions.get(coin)
+                
+                # Position was closed if it had size before but now has 0 or doesn't exist
+                prev_size = prev_pos.get('size', 0)
+                current_size = current_pos.get('size', 0) if current_pos else 0
+                
+                if prev_size > 0 and current_size == 0:
+                    # Position was closed - send notification with accurate exit price
+                    prev_pnl = prev_pos.get('unrealized_pnl', 0)
+                    prev_entry_px = prev_pos.get('entry_px', 0)
+                    prev_position_size = prev_size
+                    
+                    # Get accurate exit price and PnL from Hyperliquid API
+                    exit_price = prev_entry_px  # fallback
+                    actual_closed_size = prev_position_size
+                    realized_pnl = prev_pnl  # fallback
+                    
+                    try:
+                        # Get recent close fills from API for accurate data
+                        from app.services.hyperliquid_api_client import HyperliquidAPIClient
+                        api_client = HyperliquidAPIClient("https://api.hyperliquid-testnet.xyz", is_testnet=True)
+                        await api_client.start()
+                        
+                        success, close_fills = await api_client.get_recent_close_fills(user_address, coin, minutes_back=10)
+                        
+                        if success and close_fills:
+                            # Get the most recent close fill
+                            latest_close = close_fills[0]
+                            exit_price = float(latest_close.get('px', prev_entry_px))
+                            actual_closed_size = float(latest_close.get('sz', prev_position_size))
+                            realized_pnl = float(latest_close.get('closedPnl', prev_pnl))
+                            
+                            logger.info(f"✅ Got accurate close data from API: {coin} exit=${exit_price:.4f} size={actual_closed_size:.4f} PnL=${realized_pnl:.4f}")
+                        else:
+                            logger.warning(f"⚠️ No recent close fills found via API for {coin}, using fallback values")
+                        
+                        await api_client.stop()
+                        
+                    except Exception as api_error:
+                        logger.error(f"❌ Failed to get close fills from API: {api_error}")
+                        # Continue with fallback values
+                    
+                    logger.info(f"🔔 Individual position closed for {user_address}: {coin} entry=${prev_entry_px:.4f} exit=${exit_price:.4f} size={actual_closed_size:.4f} PnL=${realized_pnl:.4f}")
+                    
+                    # Create close notification data with accurate prices and PnL
+                    close_notification_data = {
+                        'coin': coin,
+                        'szi': '0',  # Position is now closed
+                        'unrealizedPnl': str(realized_pnl),  # Use accurate realized PnL from API
+                        'entryPx': str(prev_entry_px),
+                        'markPrice': str(exit_price),  # Accurate exit price
+                        'closedSize': str(actual_closed_size),
+                        'fullClose': True,
+                        'positionClosed': True  # Flag to indicate this is a close notification
+                    }
+                    
+                    # Check minimum notification amount using accurate PnL
+                    if abs(realized_pnl) >= notification_settings.min_notification_amount:
+                        # Send position close notification
+                        await telegram_service.send_pnl_alert(user_address, close_notification_data)
+                        
+                        # Record notification in stats
+                        await trading_stats.record_notification()
+                        
+                        logger.info(f"✅ Sent individual position close notification for {user_address}: {coin}")
+                    else:
+                        logger.debug(f"🔕 Individual position close PnL ${realized_pnl:.4f} below threshold ${notification_settings.min_notification_amount} for {user_address}")
+                    
+                    # Clear related PnL threshold notifications for this position
+                    keys_to_remove = [key for key in self.sent_notifications 
+                                    if key.startswith(f"{user_address}_{coin}_")]
+                    for key in keys_to_remove:
+                        self.sent_notifications.discard(key)
+                        
+                    logger.info(f"✅ Sent position close notification for {user_address}: {coin}")
+            
+            # Update stored positions for next comparison
+            self.user_positions[user_key] = current_positions
+                        
+        except Exception as e:
+            logger.error(f"❌ Error processing position updates for Telegram: {e}")
+    
+    async def _forward_to_order_tracking(self, user_address: str, message_data):
+        """Forward WebSocket events to the order tracking service"""
+        try:
+            from app.services.order_tracking_service import get_order_tracking_service
+            
+            order_tracking_service = get_order_tracking_service()
+            if order_tracking_service:
+                await order_tracking_service.handle_websocket_event(user_address, message_data)
+                logger.debug(f"Forwarded WebSocket event to order tracking for {user_address}")
+            else:
+                logger.debug("Order tracking service not available - skipping event forwarding")
+                
+        except Exception as e:
+            logger.error(f"Error forwarding WebSocket event to order tracking: {e}")
 
 # Global WebSocket manager instance
 ws_manager = HyperliquidWebSocketManager()

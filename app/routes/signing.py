@@ -1,5 +1,5 @@
 """
-Signing API routes
+Signing API routes with industry-grade order tracking
 """
 from fastapi import APIRouter, HTTPException, status
 from pydantic import ValidationError
@@ -7,6 +7,8 @@ from app.models import OrderRequest, CancelOrderRequest, SignatureResponse, Erro
 from app.services.hyperliquid_signer import HyperliquidSigner
 from app.config import settings
 import logging
+import uuid
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +16,79 @@ router = APIRouter(prefix="/api/v1", tags=["signing"])
 
 # Initialize the signer
 signer = HyperliquidSigner(is_testnet=settings.hyperliquid_testnet)
+
+# Global order tracking service - will be initialized in main.py
+order_tracking_service = None
+
+def set_order_tracking_service(service):
+    """Set the global order tracking service"""
+    global order_tracking_service
+    order_tracking_service = service
+
+async def _start_order_tracking(order_request: OrderRequest, signing_result: dict):
+    """Start tracking a newly signed order"""
+    try:
+        from app.services.order_state_machine import OrderContext, OrderEvent
+        
+        # Generate a unique tracking ID
+        tracking_id = str(uuid.uuid4())
+        
+        # Extract order data from signing result
+        order_data = signing_result.get("order_request", {})
+        exchange_order_id = None  # Will be updated when we get userEvents
+        
+        # Get nonce which can help us correlate with future fills
+        nonce = order_data.get("nonce")
+        
+        # Extract action details for better tracking
+        action = order_data.get("action", {})
+        order_action = action.get("order", {}) if isinstance(action, dict) else {}
+        
+        # Create order context
+        order_context = OrderContext(
+            order_id=tracking_id,
+            user_address=order_request.wallet_address.lower(),
+            asset_index=order_request.asset_index,
+            is_buy=order_request.is_buy,
+            price=float(order_request.price),
+            size=float(order_request.size),
+            order_type=order_request.order_type,
+            time_in_force=order_request.time_in_force,
+            submitted_at=datetime.utcnow(),
+            exchange_order_id=exchange_order_id,
+            metadata={
+                'tracking_id': tracking_id,
+                'state': 'pending',
+                'signing_result': signing_result,
+                'vault_address': order_request.vault_address,
+                'nonce': nonce,
+                'action': action,
+                'order_action': order_action
+            }
+        )
+        
+        # Start tracking
+        success = await order_tracking_service.track_order(tracking_id, order_context)
+        
+        if success:
+            logger.info(f"Started tracking order {tracking_id} for {order_request.wallet_address}")
+            
+            # Trigger submission event since order was successfully signed
+            await order_tracking_service.state_machine.trigger_event(
+                tracking_id,
+                OrderEvent.SUBMIT,
+                {
+                    'exchange_order_id': exchange_order_id,
+                    'signing_timestamp': datetime.utcnow().isoformat(),
+                    'source': 'signing_endpoint'
+                }
+            )
+        else:
+            logger.error(f"Failed to start tracking order {tracking_id}")
+            
+    except Exception as e:
+        logger.error(f"Error starting order tracking: {e}")
+        # Don't fail the signing request if tracking fails
 
 
 @router.post(
@@ -44,6 +119,13 @@ async def sign_order(order_request: OrderRequest) -> SignatureResponse:
         
         if result["success"]:
             logger.info(f"Order signed successfully for {order_request.wallet_address}")
+            
+            # Start order tracking if service is available
+            if order_tracking_service:
+                await _start_order_tracking(order_request, result)
+            else:
+                logger.warning("Order tracking service not available - tracking disabled")
+            
             return SignatureResponse(
                 success=True,
                 signature=result["signature"],
