@@ -591,3 +591,51 @@ Note: Non-funding ledger updates include deposits, transfers, and withdrawals.
 
 {% endtab %}
 {% endtabs %}
+
+
+## Retrieve user's fills
+
+**POST** `https://api.hyperliquid-testnet.xyz/info`
+
+#### Headers
+
+| Name           | Type   | Description          |
+| -------------- | ------ | -------------------- |
+| Content-Type\* | String | `"application/json"` |
+
+#### Request Body
+
+| Name   | Type   | Description                                     |
+| ------ | ------ | ----------------------------------------------- |
+| type\* | String | `"userFills"`                                   |
+| user\* | String | User address (42-char hex, e.g. `0x000...000`). |
+
+{% tabs %}
+{% tab title="200: OK" %}
+
+```json
+[
+  {
+    "coin": "ETH",
+    "px": "4414.9",
+    "sz": "0.0227",
+    "side": "A",
+    "time": 1755371191858,
+    "startPosition": "0.0227",
+    "dir": "Close Long",
+    "closedPnl": "0.03405",
+    "hash": "0x23df8a33e79d1ff20d280418dadad1010400b76ddc74259ecb89882dda2bb768",
+    "oid": 37688457474,
+    "crossed": true,
+    "fee": "0.045098",
+    "tid": 522854775870738,
+    "feeToken": "USDC",
+    "twapId": null
+  }
+]
+```
+
+{% endtab %}
+{% endtabs %}
+
+---
