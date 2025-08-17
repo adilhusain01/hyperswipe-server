@@ -14,6 +14,7 @@ from app.websocket import ws_manager
 from app.services.telegram import initialize_telegram_service, cleanup_telegram_service
 from app.services.database import init_database, cleanup_database
 from app.services.order_tracking_service import initialize_order_tracking_service, cleanup_order_tracking_service
+from app.services.fill_notification_service import initialize_fill_notification_service, cleanup_fill_notification_service
 
 # Configure logging
 logging.basicConfig(
@@ -58,10 +59,25 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Failed to initialize order tracking service: {e}")
         # Continue without order tracking
     
+    # Initialize fill notification service
+    try:
+        await initialize_fill_notification_service(
+            settings.hyperliquid_base_url,
+            settings.hyperliquid_testnet
+        )
+        logger.info("🔔 Fill notification service initialized")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize fill notification service: {e}")
+        # Continue without fill notifications
+    
     yield
     
     # Shutdown
     logger.info("🛑 Shutting down HyperSwipe Signing Service")
+    
+    # Cleanup fill notification service
+    await cleanup_fill_notification_service()
+    logger.info("🔔 Fill notification service stopped")
     
     # Cleanup order tracking service
     await cleanup_order_tracking_service()
