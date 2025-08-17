@@ -71,3 +71,4 @@ async def service_status() -> dict:
         },
         "status": "operational"
     }
+

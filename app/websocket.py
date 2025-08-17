@@ -98,10 +98,6 @@ class HyperliquidWebSocketManager:
         channel = data.get("channel")
         message_data = data.get("data")
         
-        # Debug: Log all incoming messages for troubleshooting
-        if channel in ["webData2", "userEvents"]:
-            logger.info(f"🔍 DEBUG: Received {channel} data: {message_data}")
-        
         if channel == "allMids":
             # Broadcast price updates to all clients (public data)
             await self.broadcast_to_all_clients({
@@ -124,7 +120,6 @@ class HyperliquidWebSocketManager:
         elif channel == "userEvents":
             # Send user events only to clients subscribed to this specific user
             user_address = self.extract_user_from_data(message_data)
-            logger.info(f"🔍 DEBUG: userEvents - extracted user: {user_address}")
             if user_address:
                 await self.broadcast_to_user_clients(user_address, {
                     "type": "userEvents",
@@ -135,7 +130,6 @@ class HyperliquidWebSocketManager:
                 await self._forward_to_order_tracking(user_address, message_data)
                 
                 # Send Telegram notifications for fills
-                logger.info(f"🔍 DEBUG: Calling handle_user_events_for_telegram for {user_address}")
                 await self.handle_user_events_for_telegram(user_address, message_data)
             else:
                 logger.warning(f"⚠️ Could not extract user from userEvents: {message_data}")
@@ -320,19 +314,22 @@ class HyperliquidWebSocketManager:
         if user_address not in self.subscribed_users:
             logger.info(f"📡 New user subscription - subscribing to Hyperliquid for: {user_address}")
             
+            # Force subscribe to userEvents FIRST (critical for fill notifications)
             subscriptions = [
-                {
-                    "method": "subscribe",
-                    "subscription": {"type": "webData2", "user": user_address}
-                },
                 {
                     "method": "subscribe", 
                     "subscription": {"type": "userEvents", "user": user_address}
+                },
+                {
+                    "method": "subscribe",
+                    "subscription": {"type": "webData2", "user": user_address}
                 }
             ]
             
             for sub in subscriptions:
+                logger.error(f"🚨 CRITICAL: Attempting subscription: {sub}")
                 await self.subscribe_to_hyperliquid(sub)
+                logger.error(f"🚨 CRITICAL: Subscription attempt completed for: {sub}")
             
             self.subscribed_users.add(user_address)
         else:
@@ -441,7 +438,7 @@ class HyperliquidWebSocketManager:
             logger.info(f"🚫 Unsubscribed from: {subscription}")
     
     async def handle_user_events_for_telegram(self, user_address: str, data):
-        """Handle user events and send Telegram notifications - ROBUST event-driven approach"""
+        """Handle user events and send Telegram notifications"""
         try:
             from app.services.telegram import get_telegram_service
             
@@ -462,10 +459,8 @@ class HyperliquidWebSocketManager:
             
             # Check if fill notifications are enabled
             if not notification_settings.fill_notifications:
-                logger.debug(f"🔕 Fill notifications disabled for {user_address}")
+                logger.debug(f"🔕 Fill notifications disabled for {user_address} - skipping")
                 return
-            
-            logger.info(f"🔍 DEBUG: userEvents data structure: {data}")
             
             # Check if this is a fill event
             if isinstance(data, dict) and 'fills' in data:
@@ -586,18 +581,17 @@ class HyperliquidWebSocketManager:
                             'volume': trade_volume
                         })
                         
-                        # Send fill notification if above threshold
-                        if trade_volume >= notification_settings.min_notification_amount:
-                            await telegram_service.send_position_fill_alert(user_address, {
-                                'coin': coin,
-                                'side': 'Buy' if side == 'B' else 'Sell',
-                                'px': str(px),
-                                'sz': str(sz),
-                                'fee': str(fee)
-                            })
-                            
-                            await trading_stats.record_notification()
-                            logger.info(f"✅ Sent fill notification: {coin} {side} {sz}@${px}")
+                        # Send fill notification for ALL fills (no threshold - every fill is important)
+                        await telegram_service.send_position_fill_alert(user_address, {
+                            'coin': coin,
+                            'side': side,  # Use the original 'B' or 'S' format that the telegram service expects
+                            'px': str(px),
+                            'sz': str(sz),
+                            'fee': str(fee)
+                        })
+                        
+                        await trading_stats.record_notification()
+                        logger.info(f"✅ Sent fill notification: {coin} {side} {sz}@${px}")
                         
                         # Always record trade stats
                         await trading_stats.record_trade(volume=trade_volume, pnl=0.0)
@@ -931,6 +925,11 @@ class HyperliquidWebSocketManager:
                 
         except Exception as e:
             logger.error(f"Error forwarding WebSocket event to order tracking: {e}")
+    
+    async def subscribe_telegram_users_to_userevents(self):
+        """Auto-subscribe all Telegram users to userEvents for fill notifications"""
+        logger.info("🔕 Auto-subscription disabled - using normal WebSocket subscription flow")
+        return
 
 # Global WebSocket manager instance
 ws_manager = HyperliquidWebSocketManager()

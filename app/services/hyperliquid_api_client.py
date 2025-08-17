@@ -364,6 +364,19 @@ class HyperliquidAPIClient:
         logger.debug(f"Found {len(close_fills)} recent close fills for {user_address} {coin}")
         return True, close_fills
     
+    async def get_meta_info(self) -> Tuple[bool, Dict[str, Any]]:
+        """Get meta information including asset mappings"""
+        data = {"type": "meta"}
+        
+        success, response = await self._make_request("POST", "/info", data)
+        
+        if success:
+            logger.debug("Retrieved meta information successfully")
+            return True, response
+        else:
+            logger.error(f"Failed to get meta info: {response}")
+            return False, {}
+    
     def get_statistics(self) -> Dict[str, Any]:
         """Get client statistics for monitoring"""
         return {
